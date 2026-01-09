@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Pixel Car Game</title>
+<style>
+body{
+  margin:0;
+  background:#111;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  height:100vh;
+  font-family:monospace;
+  color:white;
+}
+#gameCanvas{
+  background:#555;
+  border:3px solid gold;
+  display:none;
+}
+.menu{text-align:center;}
+button,select,input{
+  padding:10px 20px;
+  font-size:18px;
+  cursor:pointer;
+  background:gold;
+  border:none;
+  margin:5px;
+  font-weight:bold;
+}
+.hidden{display:none;}
+ol{padding-left:20px;}
+</style>
+</head>
+<body>
+
+<!-- LOGIN / CREATION COMPTE -->
+<div id="loginMenu" class="menu">
+  <h1>Bienvenue</h1>
+  <p>Entrez votre pseudo pour commencer :</p>
+  <input type="text" id="usernameInput" placeholder="Pseudo">
+  <br>
+  <button onclick="login()">Valider</button>
+</div>
+
+<!-- MENU PRINCIPAL -->
+<div id="mainMenu" class="menu hidden">
+  <h1>Pixel Car Game</h1>
+  <p>Joueur : <span id="currentUser"></span></p>
+  <p>Utilise ← → | Pause : ESC</p>
+  <select id="carColorSelect">
+    <option value="red">Rouge</option>
+    <option value="blue">Bleu</option>
+    <option value="green">Vert</option>
+    <option value="orange">Orange</option>
+    <option value="purple">Violet</option>
+  </select><br>
+  <button onclick="startGame()">START</button>
+  <h2>Classement Global (Top 10)</h2>
+  <ol id="leaderboard"></ol>
+</div>
+
+<!-- MENU PAUSE -->
+<div id="pauseMenu" class="menu hidden">
+  <h1>⏸️ Pause</h1>
+  <button onclick="resumeGame()">Reprendre</button>
+  <button onclick="restartGame()">Recommencer</button>
+  <button onclick="goMenu()">Menu</button>
+</div>
+
+<!-- MENU DÉFAITE -->
+<div id="loseMenu" class="menu hidden">
+  <h1>💥 Défaite</h1>
+  <p id="loseScore"></p>
+  <button onclick="restartGame()">Recommencer</button>
+  <button onclick="goMenu()">Menu</button>
+</div>
+
+<!-- MENU VICTOIRE -->
+<div id="winMenu" class="menu hidden">
+  <h1>🏆 Victoire</h1>
+  <p id="winScore"></p>
+  <button onclick="restartGame()">Recommencer</button>
+  <button onclick="goMenu()">Menu</button>
+</div>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+
+<script>
+const canvas=document.getElementById("gameCanvas");
+const ctx=canvas.getContext("2d");
+
+const loginMenu=document.getElementById("loginMenu");
+const mainMenu=document.getElementById("mainMenu");
+const pauseMenu=document.getElementById("pauseMenu");
+const loseMenu=document.getElementById("loseMenu");
+const winMenu=document.getElementById("winMenu");
+const loseScore=document.getElementById("loseScore");
+const winScore=document.getElementById("winScore");
+const carColorSelect=document.getElementById("carColorSelect");
+const leaderboardEl=document.getElementById("leaderboard");
+const currentUserEl=document.getElementById("currentUser");
+const usernameInput=document.getElementById("usernameInput");
+
+let currentUser = "";
+let carX, carY;
+let enemies=[];
+let score=0;
+let scoreMultiplier=1;
+let enemySpeed=2;
+let spawnCounter=0;
+let spawnRate=70;
+let roadOffset=0;
+let playing=false;
+let paused=false;
+let moveL=false, moveR=false;
+const WIN_SCORE=100000;
+const MAX_MULTIPLIER=4;
+let avoidedCars=0;
+let survivalFrames=0;
+
+// 🔹 Quêtes fixes
+const quests=[
+  {text:"Évite 10 voitures", type:"avoid", goal:10},
+  {text:"Survis 30 secondes", type:"time", goal:30*60},
+  {text:"Atteins 400 points", type:"score", goal:400}
+];
+let questIndex=0;
+let quest=quests[questIndex];
+
+// 🔹 Leaderboard global
+function getGlobalLeaderboard(){
+  let lb = localStorage.getItem("globalLeaderboard");
+  return lb ? JSON.parse(lb) : [];
+}
+
+function saveGlobalScore(user, score){
+  let lb = getGlobalLeaderboard();
+  lb.push({user, score});
+  lb.sort((a,b)=>b.score - a.score);
+  if(lb.length>10) lb=lb.slice(0,10);
+  localStorage.setItem("globalLeaderboard", JSON.stringify(lb));
+}
+
+function displayLeaderboard(){
+  leaderboardEl.innerHTML="";
+  const lb = getGlobalLeaderboard();
+  lb.forEach(entry=>{
+    const li=document.createElement("li");
+    li.textContent=`${entry.user} : ${entry.score}`;
+    leaderboardEl.appendChild(li);
+  });
+}
+
+// 🔹 Login / création compte
+function login(){
+  let username=usernameInput.value.trim();
+  if(!username){ alert("Entrez un pseudo !"); return; }
+  currentUser=username;
+  currentUserEl.textContent=currentUser;
+  loginMenu.classList.add("hidden");
+  mainMenu.classList.remove("hidden");
+  displayLeaderboard();
+}
+
+// 🔹 Contrôles clavier
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){ if(playing) togglePause(); return; }
+  if(e.key==="ArrowLeft") moveL=true;
+  if(e.key==="ArrowRight") moveR=true;
+});
+document.addEventListener("keyup",e=>{
+  if(e.key==="ArrowLeft") moveL=false;
+  if(e.key==="ArrowRight") moveR=false;
+});
+
+function togglePause(){
+  paused=!paused;
+  pauseMenu.classList.toggle("hidden",!paused);
+  if(!paused) requestAnimationFrame(gameLoop);
+}
+
+function resumeGame(){
+  paused=false;
+  pauseMenu.classList.add("hidden");
+  requestAnimationFrame(gameLoop);
+}
+
+function startGame(){
+  mainMenu.classList.add("hidden");
+  canvas.style.display="block";
+  resetGame();
+  playing=true;
+  paused=false;
+  gameLoop();
+}
+
+function resetGame(){
+  carX=180; carY=530;
+  enemies=[];
+  score=0;
+  scoreMultiplier=1;
+  enemySpeed=2;
+  spawnCounter=0;
+  roadOffset=0;
+  avoidedCars=0;
+  survivalFrames=0;
+  questIndex=0;
+  quest=quests[questIndex];
+}
+
+function restartGame(){
+  pauseMenu.classList.add("hidden");
+  loseMenu.classList.add("hidden");
+  winMenu.classList.add("hidden");
+  canvas.style.display="block";
+  resetGame();
+  playing=true;
+  paused=false;
+  gameLoop();
+}
+
+function goMenu(){
+  playing=false;
+  paused=false;
+  canvas.style.display="none";
+  pauseMenu.classList.add("hidden");
+  loseMenu.classList.add("hidden");
+  winMenu.classList.add("hidden");
+  mainMenu.classList.remove("hidden");
+  displayLeaderboard();
+}
+
+// 🔹 Jeu
+function spawnEnemy(){
+  enemies.push({
+    x:Math.random()*260+50,
+    y:-60,
+    color:["blue","green","orange","purple"][Math.floor(Math.random()*4)]
+  });
+}
+
+function collision(e){
+  return carX<e.x+40 && carX+40>e.x && carY<e.y+60 && carY+60>e.y;
+}
+
+function drawCar(x,y,c){
+  ctx.fillStyle=c;
+  ctx.fillRect(x,y+10,40,50);
+  ctx.fillStyle="grey";
+  ctx.fillRect(x+10,y,20,20);
+}
+
+function drawRoad(){
+  ctx.fillStyle="#333";
+  ctx.fillRect(0,0,50,600);
+  ctx.fillRect(350,0,50,600);
+  ctx.strokeStyle="white";
+  ctx.lineWidth=4;
+  ctx.setLineDash([30,20]);
+  ctx.lineDashOffset=-roadOffset;
+  ctx.beginPath();
+  ctx.moveTo(200,0);
+  ctx.lineTo(200,600);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  roadOffset+=enemySpeed;
+}
+
+function checkQuest(){
+  if(
+    (quest.type==="avoid" && avoidedCars>=quest.goal) ||
+    (quest.type==="time" && survivalFrames>=quest.goal) ||
+    (quest.type==="score" && score>=quest.goal)
+  ){
+    scoreMultiplier = Math.min(MAX_MULTIPLIER, scoreMultiplier+1);
+    questIndex++;
+    if(questIndex<quests.length){
+      quest = quests[questIndex];
+      avoidedCars=0;
+      survivalFrames=0;
+    } else {
+      quest = quests[quests.length-1];
+    }
+  }
+}
+
+function endLose(){
+  playing=false;
+  canvas.style.display="none";
+  saveGlobalScore(currentUser, score);
+  displayLeaderboard();
+  loseScore.textContent="Score : "+score;
+  loseMenu.classList.remove("hidden");
+}
+
+function endWin(){
+  playing=false;
+  canvas.style.display="none";
+  saveGlobalScore(currentUser, score);
+  displayLeaderboard();
+  winScore.textContent="Score : "+score;
+  winMenu.classList.remove("hidden");
+}
+
+function gameLoop(){
+  if(!playing || paused) return;
+
+  ctx.clearRect(0,0,400,600);
+  drawRoad();
+
+  if(moveL && carX>50) carX-=5;
+  if(moveR && carX<310) carX+=5;
+
+  drawCar(carX,carY,carColorSelect.value);
+
+  enemySpeed=2+Math.floor(score/15);
+  spawnRate=Math.max(20,70-Math.floor(score/15)*5);
+
+  spawnCounter++;
+  if(spawnCounter>spawnRate){
+    spawnEnemy();
+    spawnCounter=0;
+  }
+
+  survivalFrames++;
+
+  for(let i=enemies.length-1;i>=0;i--){
+    enemies[i].y+=enemySpeed;
+    drawCar(enemies[i].x,enemies[i].y,enemies[i].color);
+
+    if(collision(enemies[i])){
+      endLose();
+      return;
+    }
+
+    if(enemies[i].y>600){
+      enemies.splice(i,1);
+      avoidedCars++;
+      score+=scoreMultiplier;
+
+      if(score>=WIN_SCORE){
+        endWin();
+        return;
+      }
+    }
+  }
+
+  checkQuest();
+
+  ctx.fillStyle="white";
+  ctx.font="16px monospace";
+  ctx.fillText("Score : "+score+"  x"+scoreMultiplier,10,20);
+  ctx.fillText("Quête : "+quest.text,10,40);
+
+  requestAnimationFrame(gameLoop);
+}
+
+// afficher leaderboard au démarrage du menu
+displayLeaderboard();
+</script>
+</body>
+</html>
